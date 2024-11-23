@@ -12,7 +12,6 @@ reddit = praw.Reddit(
 # Kafka setup
 producer = KafkaProducer(bootstrap_servers='localhost:9092')
 
-
 def fetch_and_send():
     try:
         # Access the 'test' subreddit
