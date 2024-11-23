@@ -1,9 +1,11 @@
 from pyspark.sql import SparkSession
+import requests
+import json
 
-def read_and_write_kafka(input_topic, output_topic):
+def read_kafka_and_write_elasticsearch(input_topic, es_index):
     # Initialize Spark
     spark = SparkSession.builder \
-        .appName("KafkaPipeline") \
+        .appName("KafkaToElasticsearch") \
         .getOrCreate()
 
     # Read from topic1
@@ -15,17 +17,21 @@ def read_and_write_kafka(input_topic, output_topic):
     # Select and cast the value column as string
     messages = df.selectExpr("CAST(value AS STRING) as message")
 
-    # Write the messages to topic2
-    messages.selectExpr("CAST(message AS STRING) as value") \
-        .writeStream \
-        .format("kafka") \
-        .option("kafka.bootstrap.servers", "localhost:9092") \
-        .option("topic", output_topic) \
-        .option("checkpointLocation", "/tmp/kafka-checkpoint") \
+    def send_to_elasticsearch(partition):
+        es_url = f"http://localhost:9200/{es_index}/_doc/"
+        for row in partition:
+            doc = {"message": row["message"]}
+            response = requests.post(es_url, json=doc)
+            if response.status_code not in (200, 201):
+                print(f"Failed to index: {response.text}")
+
+    # Write messages to Elasticsearch
+    messages.writeStream \
+        .foreachBatch(lambda batch_df, _: batch_df.foreachPartition(send_to_elasticsearch)) \
         .start() \
         .awaitTermination()
 
 if __name__ == "__main__":
     input_topic = "topic1"
-    output_topic = "topic2"
-    read_and_write_kafka(input_topic, output_topic)
+    es_index = "topic1-index"  # Your Elasticsearch index
+    read_kafka_and_write_elasticsearch(input_topic, es_index)
