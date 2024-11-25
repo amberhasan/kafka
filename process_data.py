@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, udf, to_json, struct
+from pyspark.sql.functions import col, udf, to_json, struct, explode, current_timestamp
 from pyspark.sql.types import StringType, ArrayType
 import spacy
 
@@ -28,16 +28,31 @@ def read_and_write_kafka(input_topic, output_topic):
     # Select and cast the value column as string
     messages = df.selectExpr("CAST(value AS STRING) as message")
 
-    # Extract named entities and prepare for Kafka
-    entities = messages.withColumn("entities", extract_entities_udf(col("message"))) \
-                       .select(to_json(struct(col("message"), col("entities"))).alias("value"))
+    # Extract named entities
+    entities = messages.withColumn("entities", extract_entities_udf(col("message")))
 
-    # Write the processed messages to topic2
-    entities.writeStream \
+    # Explode entities into rows and add a timestamp column
+    exploded_entities = entities.select(
+        explode(col("entities")).alias("entity"),
+        current_timestamp().alias("timestamp")  # Add a timestamp column
+    )
+
+    # Add watermark and perform aggregation
+    entity_counts = exploded_entities \
+        .withWatermark("timestamp", "10 minutes") \
+        .groupBy("entity") \
+        .count()
+
+    # Convert entity counts to JSON format
+    output_data = entity_counts.select(to_json(struct(col("entity"), col("count"))).alias("value"))
+
+    # Write the processed data to topic2
+    output_data.writeStream \
+        .outputMode("update") \
         .format("kafka") \
         .option("kafka.bootstrap.servers", "localhost:9092") \
         .option("topic", output_topic) \
-        .option("checkpointLocation", "/tmp/kafka-checkpoint") \
+        .option("checkpointLocation", "/tmp/kafka-checkpoint-entity-count") \
         .start() \
         .awaitTermination()
 
