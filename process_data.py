@@ -1,11 +1,22 @@
 from pyspark.sql import SparkSession
-import requests
-import json
+from pyspark.sql.functions import col, udf, to_json, struct
+from pyspark.sql.types import StringType, ArrayType
+import spacy
 
-def read_kafka_and_write_elasticsearch(input_topic, es_index):
+# Load spaCy model
+nlp = spacy.load("en_core_web_sm")
+
+# Define a UDF to extract named entities
+def extract_entities(text):
+    doc = nlp(text)
+    return [ent.text for ent in doc.ents]
+
+extract_entities_udf = udf(extract_entities, ArrayType(StringType()))
+
+def read_and_write_kafka(input_topic, output_topic):
     # Initialize Spark
     spark = SparkSession.builder \
-        .appName("KafkaToElasticsearch") \
+        .appName("KafkaPipeline") \
         .getOrCreate()
 
     # Read from topic1
@@ -17,21 +28,20 @@ def read_kafka_and_write_elasticsearch(input_topic, es_index):
     # Select and cast the value column as string
     messages = df.selectExpr("CAST(value AS STRING) as message")
 
-    def send_to_elasticsearch(partition):
-        es_url = f"http://localhost:9200/{es_index}/_doc/"
-        for row in partition:
-            doc = {"message": row["message"]}
-            response = requests.post(es_url, json=doc)
-            if response.status_code not in (200, 201):
-                print(f"Failed to index: {response.text}")
+    # Extract named entities and prepare for Kafka
+    entities = messages.withColumn("entities", extract_entities_udf(col("message"))) \
+                       .select(to_json(struct(col("message"), col("entities"))).alias("value"))
 
-    # Write messages to Elasticsearch
-    messages.writeStream \
-        .foreachBatch(lambda batch_df, _: batch_df.foreachPartition(send_to_elasticsearch)) \
+    # Write the processed messages to topic2
+    entities.writeStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", "localhost:9092") \
+        .option("topic", output_topic) \
+        .option("checkpointLocation", "/tmp/kafka-checkpoint") \
         .start() \
         .awaitTermination()
 
 if __name__ == "__main__":
     input_topic = "topic1"
-    es_index = "topic1-index"  # Your Elasticsearch index
-    read_kafka_and_write_elasticsearch(input_topic, es_index)
+    output_topic = "topic2"
+    read_and_write_kafka(input_topic, output_topic)
