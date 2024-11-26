@@ -72,4 +72,4 @@ services:
       - "8080:8080"
       - "8081:8081"
     volumes:
-      - ./app:/opt/spark/app
+      - /Users/amberhasan/PycharmProjects/Project3:/opt/spark/app

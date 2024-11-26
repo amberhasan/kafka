@@ -52,7 +52,7 @@ def read_and_write_kafka(input_topic, output_topic):
         .format("kafka") \
         .option("kafka.bootstrap.servers", "localhost:9092") \
         .option("topic", output_topic) \
-        .option("checkpointLocation", "/tmp/kafka-checkpoint-entity-count") \
+        .option("checkpointLocation", "./tmp/kafka-checkpoint-entity-count") \
         .start() \
         .awaitTermination()
 
